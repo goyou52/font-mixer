@@ -1,0 +1,6 @@
+{
+  "name": "Font Mixer JP",
+  "description": "2つの日本語フォントを組み合わせて、自分好みのフォントを作成・微調整できるフォント合成ツール",
+  "requestFramePermissions": [],
+  "majorCapabilities": []
+}

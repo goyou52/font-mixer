@@ -132,9 +132,10 @@ export default function App() {
     const fontBBuffer = fontB.buffer.slice(0);
 
     const onWorkerMessage = async (e: MessageEvent) => {
+      console.log('Worker message received:', e.data);
       if (e.data.error) {
-        setError('フォントの生成中にエラーが発生しました。');
-        console.error(e.data.error);
+        setError('フォントの生成中にエラーが発生しました: ' + e.data.error);
+        console.error('Worker error data:', e.data.error);
         setIsProcessing(false);
         return;
       }
@@ -147,8 +148,16 @@ export default function App() {
       setPreviewFontUrl(url);
 
       try {
-        const fontFace = new FontFace('MixedPreview', buffer);
+        // Clear previous font if it exists to ensure refresh
+        const fontName = 'MixedPreview';
+        const fontFace = new FontFace(fontName, buffer);
         await fontFace.load();
+        
+        // Remove any old fonts with the same name
+        document.fonts.forEach(f => {
+          if (f.family === fontName) document.fonts.delete(f);
+        });
+        
         document.fonts.add(fontFace);
         setStatus('完了しました！');
       } catch (err) {
@@ -161,6 +170,13 @@ export default function App() {
     };
 
     workerRef.current.onmessage = onWorkerMessage;
+    workerRef.current.onerror = (err) => {
+      console.error('Worker critical error:', err);
+      setError('Workerの実行に失敗しました。ブラウザがWeb Worker(Module)をサポートしているか確認してください。');
+      setIsProcessing(false);
+    };
+
+    console.log('Posting message to worker...');
     workerRef.current.postMessage({
       fontABuffer,
       fontBBuffer,

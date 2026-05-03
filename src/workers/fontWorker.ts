@@ -9,11 +9,15 @@ import {
 
 self.onmessage = async (e) => {
   const { fontABuffer, fontBBuffer, config, fontAWeight, fontBWeight } = e.data;
+  console.log('Worker received message', { fontAWeight, fontBWeight, config });
   
   try {
+    console.log('Parsing fontA...');
     const fontA = opentype.parse(fontABuffer);
+    console.log('Parsing fontB...');
     const fontB = opentype.parse(fontBBuffer);
     
+    console.log('Collecting unicodes...');
     const glyphs: opentype.Glyph[] = [];
     const baseFont = fontA;
     const charSet = new Set<number>();
@@ -22,20 +26,25 @@ self.onmessage = async (e) => {
     const collectUnicodes = (font: opentype.Font) => {
       for (let i = 0; i < font.numGlyphs; i++) {
         const g = font.glyphs.get(i);
-        if (g.unicode) charSet.add(g.unicode);
+        if (g.unicode !== undefined) charSet.add(g.unicode);
         if (g.unicodes) g.unicodes.forEach(u => charSet.add(u));
       }
     };
     collectUnicodes(fontA);
     collectUnicodes(fontB);
 
+    console.log(`Unique unicodes collected: ${charSet.size}`);
     glyphs.push(fontA.glyphs.get(0)); // .notdef
 
     const codePoints = Array.from(charSet).sort((a, b) => a - b);
     const scaleBToA = baseFont.unitsPerEm / fontB.unitsPerEm;
     const targetWeightNum = getWeightNumber(config.weightName);
 
+    console.log('Processing glyphs...');
+    let processedCount = 0;
     for (const code of codePoints) {
+      processedCount++;
+      if (processedCount % 1000 === 0) console.log(`Processed ${processedCount}/${codePoints.length} glyphs...`);
       const char = String.fromCodePoint(code);
       let targetMode = 'A';
 
@@ -147,6 +156,8 @@ self.onmessage = async (e) => {
         glyphs.push(glyph);
       }
     }
+    
+    console.log(`Finished processing all ${glyphs.length} glyphs. Creating font...`);
 
     const mixedFont = new opentype.Font({
       familyName: config.familyName || 'MixedFont',
@@ -157,9 +168,12 @@ self.onmessage = async (e) => {
       glyphs: glyphs
     });
 
+    console.log('Generating toArrayBuffer...');
     const buffer = mixedFont.toArrayBuffer();
+    console.log('Font buffer generated successfully.');
     (self as any).postMessage({ buffer }, [buffer]);
   } catch (err) {
+    console.error('Worker error:', err);
     (self as any).postMessage({ error: (err as any).toString() });
   }
 };
