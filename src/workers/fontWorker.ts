@@ -18,26 +18,16 @@ self.onmessage = async (e) => {
     const baseFont = fontA;
     const charSet = new Set<number>();
     
-    // サブセットの決定
-    if (config.subset) {
-      // プレビュー用: 文字列に含まれる文字のみ
-      for (const char of config.subset) {
-        charSet.add(char.codePointAt(0));
+    // Efficiency: collect unique unicodes
+    const collectUnicodes = (font: opentype.Font) => {
+      for (let i = 0; i < font.numGlyphs; i++) {
+        const g = font.glyphs.get(i);
+        if (g.unicode) charSet.add(g.unicode);
+        if (g.unicodes) g.unicodes.forEach(u => charSet.add(u));
       }
-      // 基本的な英数字を含める
-      for (let i = 32; i <= 126; i++) charSet.add(i);
-    } else {
-      // 書き出し用: 全文字
-      const collectUnicodes = (font: opentype.Font) => {
-        for (let i = 0; i < font.numGlyphs; i++) {
-          const g = font.glyphs.get(i);
-          if (g.unicode) charSet.add(g.unicode);
-          if (g.unicodes) g.unicodes.forEach(u => charSet.add(u));
-        }
-      };
-      collectUnicodes(fontA);
-      collectUnicodes(fontB);
-    }
+    };
+    collectUnicodes(fontA);
+    collectUnicodes(fontB);
 
     glyphs.push(fontA.glyphs.get(0)); // .notdef
 
@@ -46,11 +36,10 @@ self.onmessage = async (e) => {
     const targetWeightNum = getWeightNumber(config.weightName);
 
     for (const code of codePoints) {
-      if (code === 0) continue;
       const char = String.fromCodePoint(code);
       let targetMode = 'A';
 
-      // カテゴリ判定
+      // Determine category
       const categories: FontCategory[] = ['kanji', 'hiragana', 'katakana', 'latin', 'symbols'];
       for (const catId of categories) {
         if (isInRange(code, catId)) {
@@ -109,7 +98,7 @@ self.onmessage = async (e) => {
         });
       }
 
-      // ウェイト補正とかな調整
+      // Weight Compensation
       let sourceWeight = fontAWeight;
       if (targetMode === 'B') sourceWeight = fontBWeight;
       else if (targetMode === 'mix') sourceWeight = fontAWeight + (fontBWeight - fontAWeight) * config.blendRatio;

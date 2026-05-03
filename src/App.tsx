@@ -116,25 +116,25 @@ export default function App() {
     }
   };
 
-  const generateMixedFont = async (isFull: boolean = false) => {
+  const generateMixedFont = async () => {
     if (!fontA.buffer || !fontB.buffer || !workerRef.current) {
-      if (isFull) setError('2つのフォントをアップロードしてください。');
+      setError('2つのフォントをアップロードしてください。');
       return;
     }
 
-    if (isProcessing) return;
+    if (isProcessing) return; // Prevent overlapping runs
 
     setIsProcessing(true);
-    setStatus(isFull ? '全文字を合成中（数分かかる場合があります）...' : 'プレビューを更新中...');
+    setStatus('フォントを生成中...');
     setError(null);
 
-    // ArrayBufferをクローンして転送（Transferable Objectsは送信後にアクセス不能になるため）
-    const fontABuffer = fontA.buffer.slice(0);
+    const fontABuffer = fontA.buffer.slice(0); // Clone for transfer
     const fontBBuffer = fontB.buffer.slice(0);
 
     const onWorkerMessage = async (e: MessageEvent) => {
       if (e.data.error) {
-        setError('合成エラー: ' + e.data.error);
+        setError('フォントの生成中にエラーが発生しました。');
+        console.error(e.data.error);
         setIsProcessing(false);
         return;
       }
@@ -143,62 +143,45 @@ export default function App() {
       const blob = new Blob([buffer], { type: 'font/opentype' });
       const url = URL.createObjectURL(blob);
       
-      if (isFull) {
-        // ダウンロード実行
-        const a = document.createElement('a');
-        a.href = url;
-        a.download = `${(config.familyName || 'MixedFont').replace(/\s+/g, '_')}.otf`;
-        a.click();
-        URL.revokeObjectURL(url);
-        setStatus('書き出し完了！');
-      } else {
-        // プレビュー表示
-        if (previewFontUrl) URL.revokeObjectURL(previewFontUrl);
-        setPreviewFontUrl(url);
+      if (previewFontUrl) URL.revokeObjectURL(previewFontUrl);
+      setPreviewFontUrl(url);
 
-        try {
-          const fontFace = new FontFace('MixedPreview', buffer);
-          await fontFace.load();
-          document.fonts.add(fontFace);
-          setStatus(isFull ? '完了！' : '');
-        } catch (err) {
-          console.error('FontFace load failed:', err);
-        }
+      try {
+        const fontFace = new FontFace('MixedPreview', buffer);
+        await fontFace.load();
+        document.fonts.add(fontFace);
+        setStatus('完了しました！');
+      } catch (err) {
+        console.error('FontFace load failed:', err);
+        setError('プレビューの読み込みに失敗しました。');
+      } finally {
+        setIsProcessing(false);
+        setTimeout(() => setStatus(''), 3000);
       }
-      setIsProcessing(false);
     };
 
     workerRef.current.onmessage = onWorkerMessage;
     workerRef.current.postMessage({
       fontABuffer,
       fontBBuffer,
-      config: {
-        ...config,
-        subset: isFull ? null : previewText + "春はあけぼの。やうやう白くなりゆく山ぎは、すこしあかりて、紫だちたる雲のほそくたなびきたる。"
-      },
+      config,
       fontAWeight: fontA.weight,
       fontBWeight: fontB.weight
     }, [fontABuffer, fontBBuffer]);
   };
 
-  // 自動プレビュー更新 (Debounced)
-  useEffect(() => {
-    if (fontA.buffer && fontB.buffer) {
-      const timer = setTimeout(() => {
-        generateMixedFont(false);
-      }, 400);
-      return () => clearTimeout(timer);
-    }
-  }, [config.blendRatio, config.kanaScale, config.kanaOffsetY, config.thickness, config.categories, previewText]);
-
   const downloadFont = () => {
-    generateMixedFont(true);
+    if (!previewFontUrl) return;
+    const a = document.createElement('a');
+    a.href = previewFontUrl;
+    const fileName = `${(config.familyName || 'MixedFont').replace(/\s+/g, '_')}-${config.weightName}.otf`;
+    a.download = fileName;
+    a.click();
   };
 
   const handleLogin = (e: FormEvent) => {
     e.preventDefault();
-    // 環境変数 VITE_APP_PASSWORD を参照。設定がない場合は 'font-blender-2026'
-    const correctPassword = import.meta.env.VITE_APP_PASSWORD || 'font-blender-2026';
+    const correctPassword = (import.meta as any).env.VITE_APP_PASSWORD || 'mixedfont2026';
     if (passwordInput === correctPassword) {
       setIsAuthenticated(true);
       setAuthError(false);
@@ -537,22 +520,22 @@ export default function App() {
           </div>
 
           <button 
-            onClick={downloadFont}
+            onClick={generateMixedFont}
             disabled={isProcessing || !fontA.font || !fontB.font}
-            className={`
-              w-full py-5 font-black uppercase tracking-[0.3em] text-[11px] transition-all flex items-center justify-center gap-3
-              ${isProcessing || !fontA.font || !fontB.font 
-                ? 'bg-neutral-200 text-neutral-400 cursor-not-allowed' 
-                : 'bg-black text-white hover:bg-[#FF3E00] shadow-xl shadow-black/10 active:scale-[0.98]'}
-            `}
+            className="w-full bg-black text-white py-4 font-black uppercase tracking-widest hover:bg-neutral-800 transition-colors flex items-center justify-center gap-3 disabled:bg-neutral-200 disabled:text-neutral-400"
           >
-            {isProcessing ? (
-              <RefreshCcw size={16} className="animate-spin" />
-            ) : (
-              <Download size={16} />
-            )}
-            {isProcessing ? 'Processing System...' : 'Export Complete .OTF'}
+            {isProcessing && <RefreshCcw size={16} className="animate-spin" />}
+            Generate Preview
           </button>
+          
+          {previewFontUrl && (
+            <button 
+              onClick={downloadFont}
+              className="w-full bg-[#FF3E00] text-white py-4 font-black uppercase tracking-widest hover:bg-[#E03600] transition-colors shadow-xl shadow-red-500/20"
+            >
+              Export .OTF ({config.weightName})
+            </button>
+          )}
         </div>
       </aside>
 
