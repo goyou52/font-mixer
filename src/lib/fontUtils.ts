@@ -23,31 +23,27 @@ export const isInRange = (code: number, category: FontCategory): boolean => {
   }
 };
 
-// ============================================================
-// 高度なリサンプリング補間エンジン
-// ============================================================
-
 interface Point { x: number; y: number }
 
 export const interpolatePaths = (pathA: any, pathB: any, ratio: number): any => {
-  // 高速パス: 端点
-  if (ratio <= 0.01) return pathA;
-  if (ratio >= 0.99) return pathB;
+  if (ratio <= 0.001) return pathA;
+  if (ratio >= 0.999) return pathB;
 
-  // 構造が完全一致する場合の高速直接補間
   const cmdsA = pathA.commands;
   const cmdsB = pathB.commands;
+
+  // 構造が完全一致する場合の高速直接補間
   if (cmdsA.length === cmdsB.length && cmdsA.every((c: any, i: number) => c.type === cmdsB[i].type)) {
     return directInterpolate(cmdsA, cmdsB, ratio);
   }
 
-  // 構造が異なる場合のリサンプリング補間
+  // 構造が異なる場合のリサンプリング補間（安定版）
   return resampledInterpolate(cmdsA, cmdsB, ratio);
 };
 
 function directInterpolate(cmdsA: any[], cmdsB: any[], ratio: number): any {
   const path = new opentype.Path();
-  const lerp = (a: number, b: number) => a + (b - a) * ratio;
+  const lerp = (v1: number, v2: number) => v1 + (v2 - v1) * ratio;
 
   for (let i = 0; i < cmdsA.length; i++) {
     const a = cmdsA[i], b = cmdsB[i];
@@ -65,6 +61,11 @@ function directInterpolate(cmdsA: any[], cmdsB: any[], ratio: number): any {
 function resampledInterpolate(cmdsA: any[], cmdsB: any[], ratio: number): any {
   const contoursA = commandsToContours(cmdsA);
   const contoursB = commandsToContours(cmdsB);
+  
+  // 向き（Winding）を正規化（すべて時計回りに）
+  contoursA.forEach(c => normalizeWinding(c));
+  contoursB.forEach(c => normalizeWinding(c));
+
   const matched = matchContours(contoursA, contoursB);
   const path = new opentype.Path();
 
@@ -73,7 +74,8 @@ function resampledInterpolate(cmdsA: any[], cmdsB: any[], ratio: number): any {
     if (cA && !cB) { addContourToPath(path, cA, 1.0 - ratio); continue; }
     if (!cA || !cB) continue;
 
-    const N = Math.min(Math.max(Math.max(cA.length, cB.length), 32), 96);
+    // 複雑な漢字に対応するためサンプル数を増加 (128点固定)
+    const N = 128; 
     let ptsA = resampleContour(cA, N);
     let ptsB = alignStartingPoint(ptsA, resampleContour(cB, N));
 
@@ -82,7 +84,8 @@ function resampledInterpolate(cmdsA: any[], cmdsB: any[], ratio: number): any {
       y: p.y + (ptsB[i].y - p.y) * ratio
     }));
 
-    reconstructSmoothPath(path, interpolated);
+    // 安定性を重視し、高密度ポリラインとして再構築
+    reconstructPath(path, interpolated);
   }
   return path;
 }
@@ -104,7 +107,7 @@ function commandsToContours(cmds: any[]): Point[][] {
         cx = cmd.x; cy = cmd.y;
         break;
       case 'Q': {
-        const steps = 4;
+        const steps = 6;
         for (let t = 1; t <= steps; t++) {
           const tt = t / steps;
           const inv = 1 - tt;
@@ -117,7 +120,7 @@ function commandsToContours(cmds: any[]): Point[][] {
         break;
       }
       case 'C': {
-        const steps = 6;
+        const steps = 8;
         for (let t = 1; t <= steps; t++) {
           const tt = t / steps;
           const inv = 1 - tt;
@@ -139,6 +142,15 @@ function commandsToContours(cmds: any[]): Point[][] {
   return contours;
 }
 
+function normalizeWinding(pts: Point[]) {
+  let area = 0;
+  for (let i = 0; i < pts.length; i++) {
+    const j = (i + 1) % pts.length;
+    area += (pts[i].x * pts[j].y) - (pts[j].x * pts[i].y);
+  }
+  if (area < 0) pts.reverse();
+}
+
 function matchContours(cA: Point[][], cB: Point[][]) {
   const infoA = cA.map((c, i) => ({ idx: i, ...contourInfo(c) }));
   const infoB = cB.map((c, i) => ({ idx: i, ...contourInfo(c) }));
@@ -150,7 +162,8 @@ function matchContours(cA: Point[][], cB: Point[][]) {
     let bestScore = Infinity;
     for (const b of infoB) {
       if (usedB.has(b.idx)) continue;
-      const score = Math.pow(a.cx - b.cx, 2) + Math.pow(a.cy - b.cy, 2) + Math.abs(a.area - b.area) * 10;
+      // 重心距離と面積差でマッチング
+      const score = Math.sqrt(Math.pow(a.cx - b.cx, 2) + Math.pow(a.cy - b.cy, 2)) + Math.abs(Math.sqrt(a.area) - Math.sqrt(b.area)) * 2;
       if (score < bestScore) { bestScore = score; bestIdx = b.idx; }
     }
     if (bestIdx >= 0) { usedB.add(bestIdx); matched.push({ cA: cA[a.idx], cB: cB[bestIdx] }); }
@@ -168,14 +181,16 @@ function contourInfo(pts: Point[]) {
     area += cross; cx += (pts[i].x + pts[j].x) * cross; cy += (pts[i].y + pts[j].y) * cross;
   }
   area = Math.abs(area) / 2;
-  if (area > 0.01) { cx /= (6 * area); cy /= (6 * area); }
+  if (area > 1) { cx /= (6 * area); cy /= (6 * area); }
   else { cx = pts.reduce((s, p) => s + p.x, 0) / pts.length; cy = pts.reduce((s, p) => s + p.y, 0) / pts.length; }
   return { area, cx, cy };
 }
 
 function resampleContour(pts: Point[], N: number): Point[] {
   const lengths = [0];
-  for (let i = 1; i < pts.length; i++) lengths.push(lengths[i-1] + Math.sqrt(Math.pow(pts[i].x-pts[i-1].x, 2) + Math.pow(pts[i].y-pts[i-1].y, 2)));
+  for (let i = 1; i < pts.length; i++) {
+    lengths.push(lengths[i-1] + Math.sqrt(Math.pow(pts[i].x-pts[i-1].x, 2) + Math.pow(pts[i].y-pts[i-1].y, 2)));
+  }
   const total = lengths[lengths.length-1] + Math.sqrt(Math.pow(pts[0].x-pts[pts.length-1].x, 2) + Math.pow(pts[0].y-pts[pts.length-1].y, 2));
   const res: Point[] = [];
   const closedPts = [...pts, pts[0]];
@@ -193,24 +208,23 @@ function resampleContour(pts: Point[], N: number): Point[] {
 
 function alignStartingPoint(ptsA: Point[], ptsB: Point[]): Point[] {
   const N = ptsA.length;
-  const step = Math.max(1, Math.floor(N / 8));
   let bestOffset = 0, bestDist = Infinity;
-  for (let i = 0; i < N; i += step) {
+  // 全探索で最適な開始位置を探る
+  for (let i = 0; i < N; i++) {
     let dist = 0;
-    for (let j = 0; j < N; j += step) dist += Math.pow(ptsA[j].x - ptsB[(j+i)%N].x, 2) + Math.pow(ptsA[j].y - ptsB[(j+i)%N].y, 2);
+    for (let j = 0; j < N; j++) {
+      dist += Math.pow(ptsA[j].x - ptsB[(j+i)%N].x, 2) + Math.pow(ptsA[j].y - ptsB[(j+i)%N].y, 2);
+    }
     if (dist < bestDist) { bestDist = dist; bestOffset = i; }
   }
   return [...ptsB.slice(bestOffset), ...ptsB.slice(0, bestOffset)];
 }
 
-function reconstructSmoothPath(path: any, pts: Point[]) {
+function reconstructPath(path: any, pts: Point[]) {
   if (pts.length < 2) return;
   path.moveTo(pts[0].x, pts[0].y);
-  const n = pts.length;
-  const t = 0.35;
-  for (let i = 0; i < n; i++) {
-    const p0 = pts[(i-1+n)%n], p1 = pts[i], p2 = pts[(i+1)%n], p3 = pts[(i+2)%n];
-    path.curveTo(p1.x + (p2.x-p0.x)*t, p1.y + (p2.y-p0.y)*t, p2.x - (p3.x-p1.x)*t, p2.y - (p3.y-p1.y)*t, p2.x, p2.y);
+  for (let i = 1; i < pts.length; i++) {
+    path.lineTo(pts[i].x, pts[i].y);
   }
   path.close();
 }
@@ -220,7 +234,7 @@ function addContourToPath(path: any, contour: Point[], opacity: number) {
   const cx = contour.reduce((s, p) => s + p.x, 0) / contour.length;
   const cy = contour.reduce((s, p) => s + p.y, 0) / contour.length;
   const scaled = contour.map(p => ({ x: cx + (p.x-cx)*opacity, y: cy + (p.y-cy)*opacity }));
-  reconstructSmoothPath(path, scaled);
+  reconstructPath(path, scaled);
 }
 
 export const scalePath = (path: any, scale: number): any => {
